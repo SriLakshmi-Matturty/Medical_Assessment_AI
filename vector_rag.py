@@ -124,10 +124,10 @@ class DiseaseRAGSystem:
     
     def calculate_disease_scores(self, matched_symptoms):
         """
-        Calculate scores for each disease based on matched symptoms.
+        Calculate improved scores for each disease using coverage and IDF weighting.
         
-        Scoring formula: sum of (1 / num_symptoms_in_disease / num_matched_symptoms)
-        for each matched symptom.
+        Formula:
+            score_d = (Σ (similarity * idf(symptom))) / num_symptoms_in_disease * (num_matched / num_symptoms_in_disease)
         
         Args:
             matched_symptoms: List of tuples (symptom, similarity, disease)
@@ -135,40 +135,54 @@ class DiseaseRAGSystem:
         Returns:
             Dictionary of disease scores sorted by score (highest first)
         """
-        # Group matched symptoms by disease
+        if not matched_symptoms:
+            return {}
+    
+        # 1. Compute symptom frequency across all diseases
+        symptom_freq = {}
+        total_diseases = len(self.symptom_embeddings)
+        for disease, data in self.symptom_embeddings.items():
+            for symptom in data['symptoms']:
+                symptom_freq[symptom] = symptom_freq.get(symptom, 0) + 1
+    
+        # 2. Compute IDF for each symptom
+        symptom_idf = {
+            s: np.log(total_diseases / (1 + freq)) for s, freq in symptom_freq.items()
+        }
+    
+        # 3. Group matched symptoms by disease
         disease_matches = {}
         for symptom, similarity, disease in matched_symptoms:
             if disease not in disease_matches:
                 disease_matches[disease] = []
             disease_matches[disease].append((symptom, similarity))
-        
-        # Calculate scores
+    
+        # 4. Compute improved score
         disease_scores = {}
-        total_matched_symptoms = len(set([s[0] for s in matched_symptoms]))
-        
         for disease, matches in disease_matches.items():
-            # Get total number of symptoms for this disease
-            num_disease_symptoms = len(self.symptom_embeddings[disease]['symptoms'])
-            
-            # Calculate score for each matched symptom
-            score = 0
-            for symptom, similarity in matches:
-                # Base score according to your formula
-                base_score = (1.0 / num_disease_symptoms) + (1.0 / total_matched_symptoms)
-                # Weight by similarity score
-                score += base_score * similarity
-            
+            total_symptoms = len(self.symptom_embeddings[disease]['symptoms'])
+            num_matched = len(matches)
+    
+            # Weighted sum of similarities × IDF
+            weighted_sum = sum(similarity * symptom_idf.get(symptom, 1.0)
+                               for symptom, similarity in matches)
+    
+            # Normalize by coverage
+            coverage_factor = num_matched / total_symptoms
+    
+            score = (weighted_sum / total_symptoms) * coverage_factor
+    
             disease_scores[disease] = {
                 'score': score,
                 'matched_symptoms': [s[0] for s in matches],
-                'num_matches': len(matches),
-                'total_symptoms': num_disease_symptoms
+                'num_matches': num_matched,
+                'total_symptoms': total_symptoms
             }
-        
-        # Sort by score
+    
+        # 5. Sort by score
         sorted_diseases = sorted(disease_scores.items(), key=lambda x: x[1]['score'], reverse=True)
-        
         return dict(sorted_diseases)
+
     
     def get_disease_info(self, disease_name):
         """Get full information for a specific disease."""
